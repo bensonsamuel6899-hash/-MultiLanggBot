@@ -24,13 +24,12 @@ if not TOKEN:
 
 logger.info(f"✅ Token loaded successfully! First 10 chars: {TOKEN[:10]}...")
 
-# ===== TRANSLATION ENGINES =====
-# Google Translate API (free, no key needed for basic use)
-# For production, consider using DeepL API [citation:12]
+# ===== TRANSLATION FUNCTIONS =====
 
-async def translate_google(text, target_lang, source_lang="auto"):
-    """Translate using Google Translate API"""
+async def translate_text(text, target_lang, source_lang="auto"):
+    """Translate text using Google Translate API"""
     try:
+        # Use Google Translate API
         url = "https://translate.googleapis.com/translate_a/single"
         params = {
             "client": "gtx",
@@ -40,58 +39,62 @@ async def translate_google(text, target_lang, source_lang="auto"):
             "q": text
         }
         
+        logger.info(f"Translating from {source_lang} to {target_lang}: {text[:50]}...")
+        
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
+                    logger.info(f"Translation API Response: {str(data)[:200]}...")
+                    
                     if data and len(data) > 0 and data[0]:
                         translated = ""
                         for item in data[0]:
                             if item and len(item) > 0:
                                 translated += item[0]
-                        return translated
-                return None
+                        
+                        if translated:
+                            logger.info(f"Translation successful: {translated[:50]}...")
+                            return translated, "Google Translate"
+                        else:
+                            logger.warning("Translation returned empty string")
+                            return None, None
+                else:
+                    logger.error(f"Translation API error: {response.status}")
+                    return None, None
     except Exception as e:
-        logger.error(f"Google Translate error: {str(e)}")
-        return None
+        logger.error(f"Translation error: {str(e)}")
+        return None, None
 
-async def translate_libretranslate(text, target_lang, source_lang="auto"):
-    """Translate using LibreTranslate (free, open source)"""
+async def detect_language(text):
+    """Detect language using Google Translate API"""
     try:
-        url = "https://libretranslate.com/translate"
-        payload = {
-            "q": text,
-            "source": source_lang,
-            "target": target_lang,
-            "format": "text"
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {
+            "client": "gtx",
+            "sl": "auto",
+            "tl": "en",
+            "dt": "t",
+            "q": text
         }
         
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as response:
+            async with session.get(url, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return data.get("translatedText")
+                    # Try to detect language from response
+                    if data and len(data) > 1:
+                        detected = data[1]
+                        if detected and len(detected) > 0:
+                            lang_code = detected[0][2] if len(detected[0]) > 2 else None
+                            if lang_code:
+                                return lang_code
                 return None
     except Exception as e:
-        logger.error(f"LibreTranslate error: {str(e)}")
+        logger.error(f"Language detection error: {str(e)}")
         return None
 
-async def translate_text(text, target_lang, source_lang="auto"):
-    """Translate text with fallback engines"""
-    # Try Google Translate first
-    result = await translate_google(text, target_lang, source_lang)
-    if result:
-        return result, "Google Translate"
-    
-    # Fallback to LibreTranslate
-    result = await translate_libretranslate(text, target_lang, source_lang)
-    if result:
-        return result, "LibreTranslate"
-    
-    return None, None
-
 # ===== LANGUAGE SUPPORT =====
-# Supported languages with their names and emoji flags [citation:5]
 LANGUAGES = {
     "en": {"name": "English", "flag": "🇺🇸"},
     "es": {"name": "Spanish", "flag": "🇪🇸"},
@@ -110,36 +113,10 @@ LANGUAGES = {
     "id": {"name": "Indonesian", "flag": "🇮🇩"}
 }
 
-def detect_language_code(text):
-    """Simple language detection based on common patterns"""
-    # This is a basic detection - for production, use langdetect or similar
-    text_lower = text.lower()
-    
-    # Check for common patterns
-    if any(c in text_lower for c in "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"):
-        return "ru"
-    elif any(c in text_lower for c in "ñáéíóúü¿¡"):
-        return "es"
-    elif any(c in text_lower for c in "àâäæçéèêëîïôœùûüÿ"):
-        return "fr"
-    elif any(c in text_lower for c in "äöüß"):
-        return "de"
-    elif any(c in text_lower for c in "абвгдежзийклмнопрстуфхцчшщъьюя"):
-        return "bg"  # Bulgarian/other Cyrillic
-    elif any(c in text_lower for c in "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん"):
-        return "ja"
-    elif any(c in text_lower for c in "ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎ"):
-        return "ko"
-    elif any(c in text_lower for c in "ضصثقفغعهخحجدشسيبلاتنمكطظ"):
-        return "ar"
-    else:
-        return "en"  # Default to English
-
 # ===== BOT COMMAND HANDLERS =====
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send welcome message when /start is issued"""
-    user_lang = context.user_data.get("lang", DEFAULT_LANG)
     user_name = update.effective_user.first_name
     
     welcome = (
@@ -148,7 +125,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📝 *What I can do:*\n"
         f"• Translate text to any supported language\n"
         f"• Auto-detect source language\n"
-        f"• Multi-engine translation (Google, LibreTranslate)\n"
         f"• Support for 15+ languages\n\n"
         f"🔧 *Commands:*\n"
         f"/start - Show this message\n"
@@ -200,7 +176,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/stats - Your usage statistics\n\n"
         "⚡ *Tips:*\n"
         "• I auto-detect source language\n"
-        "• Multiple translation engines for reliability\n"
         "• Your language preference is saved\n"
         "• Works in groups too!"
     )
@@ -251,17 +226,31 @@ async def detect_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Please reply to a text message.")
             return
         
-        detected_lang = detect_language_code(text)
-        lang_name = LANGUAGES.get(detected_lang, {}).get("name", "Unknown")
-        flag = LANGUAGES.get(detected_lang, {}).get("flag", "🌐")
-        
-        await update.message.reply_text(
-            f"🔍 *Language Detection*\n\n"
-            f"📝 *Text:* {text[:50]}...\n"
-            f"🌐 *Detected Language:* {flag} {lang_name}\n\n"
-            f"💡 You can translate this message by replying with /translate",
+        processing = await update.message.reply_text(
+            "🔍 *Detecting language...*",
             parse_mode="Markdown"
         )
+        
+        detected_lang = await detect_language(text)
+        
+        await processing.delete()
+        
+        if detected_lang:
+            lang_info = LANGUAGES.get(detected_lang, {})
+            lang_name = lang_info.get("name", "Unknown")
+            flag = lang_info.get("flag", "🌐")
+            
+            await update.message.reply_text(
+                f"🔍 *Language Detection*\n\n"
+                f"📝 *Text:* {text[:100]}...\n"
+                f"🌐 *Detected Language:* {flag} {lang_name}\n\n"
+                f"💡 You can translate this message by replying with /translate",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Could not detect language. Please try again."
+            )
     else:
         await update.message.reply_text(
             "❌ Please reply to a message to detect its language."
@@ -292,19 +281,21 @@ async def translate_and_send(update: Update, text, target_lang):
     )
     
     try:
-        # Detect source language
-        source_lang = detect_language_code(text)
-        source_name = LANGUAGES.get(source_lang, {}).get("name", "Unknown")
-        target_name = LANGUAGES.get(target_lang, {}).get("name", "English")
-        
         # Translate
-        translated, engine = await translate_text(text, target_lang, source_lang)
+        translated, engine = await translate_text(text, target_lang)
         
         await processing.delete()
         
         if translated:
             # Update user stats
             context.user_data["translated_count"] = context.user_data.get("translated_count", 0) + 1
+            
+            # Detect source language if possible
+            source_lang = await detect_language(text)
+            if not source_lang:
+                source_lang = "unknown"
+            source_name = LANGUAGES.get(source_lang, {}).get("name", "Unknown")
+            target_name = LANGUAGES.get(target_lang, {}).get("name", "English")
             
             await update.message.reply_text(
                 f"🌐 *Translation Result*\n\n"
@@ -345,8 +336,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if user has a preferred language
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     
-    # Auto-translate if user has a language set (and not the default command messages)
-    if user_lang and not text.startswith('/'):
+    # Check if the message is a command
+    if text.startswith('/'):
+        return
+    
+    # Auto-translate if user has a language set
+    if user_lang:
+        # Check if text is already in the target language (skip translation)
+        detected_lang = await detect_language(text)
+        
+        if detected_lang and detected_lang == user_lang:
+            # If the text is already in the target language, don't translate
+            return
+        
         await translate_and_send(update, text, user_lang)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
